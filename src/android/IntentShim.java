@@ -51,22 +51,17 @@ import static android.os.Environment.getExternalStorageState;
 public class IntentShim extends CordovaPlugin {
 
     private final Map<BroadcastReceiver, CallbackContext> receiverCallbacks = new HashMap<>();
-
     private static final String LOG_TAG = "Cordova Intents Shim";
     private CallbackContext onNewIntentCallbackContext = null;
     private CallbackContext onActivityResultCallbackContext = null;
-
     private Intent deferredIntent = null;
 
     public IntentShim() {
-
     }
 
-    public boolean execute(String action, JSONArray args, final CallbackContext callbackContext) throws JSONException
-    {
+    public boolean execute(String action, JSONArray args, final CallbackContext callbackContext) throws JSONException {
         Log.d(LOG_TAG, "Action: " + action);
-        if (action.equals("startActivity") || action.equals("startActivityForResult"))
-        {
+        if (action.equals("startActivity") || action.equals("startActivityForResult")) {
             if (args.length() != 1) {
                 callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.INVALID_ACTION));
                 return false;
@@ -77,17 +72,13 @@ public class IntentShim extends CordovaPlugin {
             int requestCode = obj.has("requestCode") ? obj.getInt("requestCode") : 1;
 
             boolean bExpectResult = false;
-            if (action.equals("startActivityForResult"))
-            {
+            if (action.equals("startActivityForResult")) {
                 bExpectResult = true;
                 this.onActivityResultCallbackContext = callbackContext;
             }
             startActivity(intent, bExpectResult, requestCode, callbackContext);
-
             return true;
-        }
-        else if (action.equals("sendBroadcast"))
-        {
+        } else if (action.equals("sendBroadcast")) {
             if (args.length() != 1) {
                 callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.INVALID_ACTION));
                 return false;
@@ -95,13 +86,11 @@ public class IntentShim extends CordovaPlugin {
 
             JSONObject obj = args.getJSONObject(0);
             Intent intent = populateIntent(obj, callbackContext);
-
+            Log.d(LOG_TAG, "Sending broadcast with action: " + intent.getAction());
             sendBroadcast(intent);
             callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK));
             return true;
-        }
-        else if (action.equals("startService"))
-        {
+        } else if (action.equals("startService")) {
             if (args.length() != 1) {
                 callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.INVALID_ACTION));
                 return false;
@@ -111,11 +100,8 @@ public class IntentShim extends CordovaPlugin {
             startService(intent);
             callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK));
             return true;
-        }
-        else if (action.equals("registerBroadcastReceiver"))
-        {
-            Log.d(LOG_TAG, "Plugin no longer unregisters receivers on registerBroadcastReceiver invocation");
-
+        } else if (action.equals("registerBroadcastReceiver")) {
+            Log.d(LOG_TAG, "Registering receiver for Android SDK: " + Build.VERSION.SDK_INT);
             if (args.length() != 1) {
                 callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.INVALID_ACTION));
                 return false;
@@ -123,8 +109,7 @@ public class IntentShim extends CordovaPlugin {
 
             JSONObject obj = args.getJSONObject(0);
             JSONArray filterActions = obj.has("filterActions") ? obj.getJSONArray("filterActions") : null;
-            if (filterActions == null || filterActions.length() == 0)
-            {
+            if (filterActions == null || filterActions.length() == 0) {
                 Log.w(LOG_TAG, "filterActions argument is not in the expected format");
                 callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.INVALID_ACTION));
                 return false;
@@ -135,8 +120,9 @@ public class IntentShim extends CordovaPlugin {
 
             IntentFilter filter = new IntentFilter();
             for (int i = 0; i < filterActions.length(); i++) {
-                Log.d(LOG_TAG, "Registering broadcast receiver for filter: " + filterActions.getString(i));
-                filter.addAction(filterActions.getString(i));
+                String filterAction = filterActions.getString(i);
+                Log.d(LOG_TAG, "Added action to filter: " + filterAction);
+                filter.addAction(filterAction);
             }
 
             JSONArray filterCategories = obj.has("filterCategories") ? obj.getJSONArray("filterCategories") : null;
@@ -148,37 +134,49 @@ public class IntentShim extends CordovaPlugin {
             }
 
             JSONArray filterDataSchemes = obj.has("filterDataSchemes") ? obj.getJSONArray("filterDataSchemes") : null;
-            if (filterDataSchemes != null && filterDataSchemes.length() > 0)
-            {
-                for (int i = 0; i < filterDataSchemes.length(); i++)
-                {
+            if (filterDataSchemes != null && filterDataSchemes.length() > 0) {
+                for (int i = 0; i < filterDataSchemes.length(); i++) {
                     Log.d(LOG_TAG, "Associating data scheme to filter: " + filterDataSchemes.getString(i));
                     filter.addDataScheme(filterDataSchemes.getString(i));
                 }
             }
 
-            BroadcastReceiver broadcastReceiver = newBroadcastReceiver();
+            BroadcastReceiver broadcastReceiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    Log.d(LOG_TAG, "Received broadcast with action: " + intent.getAction());
+                    String data = intent.getStringExtra("com.symbol.datawedge.data_string");
+                    Log.d(LOG_TAG, "Broadcast data: " + data);
+                    CallbackContext callback = receiverCallbacks.get(this);
+                    if (callback != null) {
+                        Log.d(LOG_TAG, "Sending intent to JS: " + getIntentJson(intent).toString());
+                        PluginResult result = new PluginResult(PluginResult.Status.OK, getIntentJson(intent));
+                        result.setKeepCallback(true);
+                        callback.sendPluginResult(result);
+                    } else {
+                        Log.w(LOG_TAG, "No callback context found for broadcast");
+                    }
+                }
+            };
 
-            // Modificação para suportar Android 13+ (API 33)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                Log.d(LOG_TAG, "Using RECEIVER_EXPORTED for Android 13+");
                 this.cordova.getActivity().registerReceiver(broadcastReceiver, filter, Context.RECEIVER_EXPORTED);
             } else {
+                Log.d(LOG_TAG, "Using legacy receiver registration");
                 this.cordova.getActivity().registerReceiver(broadcastReceiver, filter);
             }
+            Log.d(LOG_TAG, "Receiver registered successfully");
             receiverCallbacks.put(broadcastReceiver, callbackContext);
 
             callbackContext.sendPluginResult(result);
-        }
-        else if (action.equals("unregisterBroadcastReceiver"))
-        {
-            try
-            {
+            return true;
+        } else if (action.equals("unregisterBroadcastReceiver")) {
+            try {
                 unregisterAllBroadcastReceivers();
-            }
-            catch (IllegalArgumentException e) {}
-        }
-        else if (action.equals("onIntent"))
-        {
+            } catch (IllegalArgumentException e) {}
+            return true;
+        } else if (action.equals("onIntent")) {
             if (args.length() != 1) {
                 callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.INVALID_ACTION));
                 return false;
@@ -195,9 +193,7 @@ public class IntentShim extends CordovaPlugin {
             result.setKeepCallback(true);
             callbackContext.sendPluginResult(result);
             return true;
-        }
-        else if (action.equals("onActivityResult"))
-        {
+        } else if (action.equals("onActivityResult")) {
             if (args.length() != 1) {
                 callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.INVALID_ACTION));
                 return false;
@@ -209,29 +205,23 @@ public class IntentShim extends CordovaPlugin {
             result.setKeepCallback(true);
             callbackContext.sendPluginResult(result);
             return true;
-        }
-        else if (action.equals("getIntent"))
-        {
+        } else if (action.equals("getIntent")) {
             if (args.length() != 0) {
                 callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.INVALID_ACTION));
                 return false;
             }
 
             Intent intent;
-
             if (this.deferredIntent != null) {
                 intent = this.deferredIntent;
                 this.deferredIntent = null;
-            }
-            else {
+            } else {
                 intent = cordova.getActivity().getIntent();
             }
 
             callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK, getIntentJson(intent)));
             return true;
-        }
-        else if (action.equals("sendResult"))
-        {
+        } else if (action.equals("sendResult")) {
             Intent result = new Intent();
             if (args.length() > 0) {
                 JSONObject json = args.getJSONObject(0);
@@ -263,12 +253,9 @@ public class IntentShim extends CordovaPlugin {
 
             cordova.getActivity().setResult(Activity.RESULT_OK, result);
             callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK));
-
             cordova.getActivity().finish();
-
-        }
-        else if (action.equals("realPathFromUri"))
-        {
+            return true;
+        } else if (action.equals("realPathFromUri")) {
             if (args.length() != 1) {
                 callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.INVALID_ACTION));
                 return false;
@@ -278,10 +265,7 @@ public class IntentShim extends CordovaPlugin {
             String realPath = getRealPathFromURI_API19(obj, callbackContext);
             callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK, realPath));
             return true;
-
-        }
-        else if (action.equals("packageExists"))
-        {
+        } else if (action.equals("packageExists")) {
             try {
                 if (args.length() < 1) {
                     callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.INVALID_ACTION));
@@ -297,78 +281,63 @@ public class IntentShim extends CordovaPlugin {
                 return true;
             }
         }
-
         return true;
     }
 
     private void unregisterAllBroadcastReceivers() {
         Log.d(LOG_TAG, "Unregistering all broadcast receivers, size was " + receiverCallbacks.size());
-        for (BroadcastReceiver broadcastReceiver: receiverCallbacks.keySet()){
+        for (BroadcastReceiver broadcastReceiver : receiverCallbacks.keySet()) {
             this.cordova.getActivity().unregisterReceiver(broadcastReceiver);
         }
         receiverCallbacks.clear();
     }
 
-    private Uri remapUriWithFileProvider(String uriAsString, final CallbackContext callbackContext)
-    {
-        int permissionCheck = ContextCompat.checkSelfPermission(this.cordova.getActivity(),
-                Manifest.permission.READ_EXTERNAL_STORAGE);
-        if (permissionCheck != PackageManager.PERMISSION_GRANTED)
-        {
-            ActivityCompat.requestPermissions(this.cordova.getActivity(),
-                    new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, 1);
+    private Uri remapUriWithFileProvider(String uriAsString, final CallbackContext callbackContext) {
+        int permissionCheck = ContextCompat.checkSelfPermission(this.cordova.getActivity(), Manifest.permission.READ_EXTERNAL_STORAGE);
+        if (permissionCheck != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this.cordova.getActivity(), new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, 1);
             callbackContext.error("Please grant read external storage permission");
             return null;
         }
 
-        try
-        {
+        try {
             String externalStorageState = getExternalStorageState();
             if (externalStorageState.equals(Environment.MEDIA_MOUNTED) || externalStorageState.equals(Environment.MEDIA_MOUNTED_READ_ONLY)) {
                 String fileName = uriAsString.substring(uriAsString.indexOf('/') + 2, uriAsString.length());
                 File uriAsFile = new File(fileName);
                 boolean fileExists = uriAsFile.exists();
-                if (!fileExists)
-                {
-                    Log.e(LOG_TAG, "File at path " + uriAsFile.getPath() + " with name " + uriAsFile.getName() + "does not exist");
+                if (!fileExists) {
+                    Log.e(LOG_TAG, "File at path " + uriAsFile.getPath() + " with name " + uriAsFile.getName() + " does not exist");
                     callbackContext.error("File not found: " + uriAsFile.toString());
                     return null;
                 }
                 String PACKAGE_NAME = this.cordova.getActivity().getPackageName() + ".darryncampbell.cordova.plugin.intent.fileprovider";
                 Uri uri = FileProvider.getUriForFile(this.cordova.getActivity().getApplicationContext(), PACKAGE_NAME, uriAsFile);
                 return uri;
-            }
-            else
-            {
-                Log.e(LOG_TAG, "Storage directory is not mounted.  Please ensure the device is not connected via USB for file transfer");
+            } else {
+                Log.e(LOG_TAG, "Storage directory is not mounted. Please ensure the device is not connected via USB for file transfer");
                 callbackContext.error("Storage directory is returning not mounted");
                 return null;
             }
-        } catch (StringIndexOutOfBoundsException e)
-        {
+        } catch (StringIndexOutOfBoundsException e) {
             Log.e(LOG_TAG, "URL is not well formed");
             callbackContext.error("URL is not well formed");
             return null;
         }
     }
 
-    private String getRealPathFromURI_API19(JSONObject obj, CallbackContext callbackContext) throws JSONException
-    {
+    private String getRealPathFromURI_API19(JSONObject obj, CallbackContext callbackContext) throws JSONException {
         Uri uri = obj.has("uri") ? Uri.parse(obj.getString("uri")) : null;
-        if (uri == null)
-        {
+        if (uri == null) {
             Log.w(LOG_TAG, "URI is not a specified parameter");
             throw new JSONException("URI is not a specified parameter");
         }
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
             String filePath = "";
             if (uri.getHost().contains("com.android.providers.media")) {
-                int permissionCheck = ContextCompat.checkSelfPermission(this.cordova.getActivity(),
-                        Manifest.permission.READ_EXTERNAL_STORAGE);
-                if (permissionCheck != PackageManager.PERMISSION_GRANTED)
-                {
-                    ActivityCompat.requestPermissions(this.cordova.getActivity(),
-                            new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, 1);
+                int permissionCheck = ContextCompat.checkSelfPermission(this.cordova.getActivity(), Manifest.permission.READ_EXTERNAL_STORAGE);
+                if (permissionCheck != PackageManager.PERMISSION_GRANTED) {
+                    ActivityCompat.requestPermissions(this.cordova.getActivity(), new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, 1);
                     callbackContext.error("Please grant read external storage permission");
                     return null;
                 }
@@ -390,32 +359,24 @@ public class IntentShim extends CordovaPlugin {
             } else {
                 String[] proj = {MediaStore.Images.Media.DATA};
                 Cursor cursor = this.cordova.getActivity().getApplicationContext().getContentResolver().query(uri, proj, null, null, null);
-                int column_index
-                        = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA);
+                int column_index = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA);
                 cursor.moveToFirst();
                 return cursor.getString(column_index);
             }
         }
-
         return "Requires KK or higher";
     }
 
     private void startActivity(Intent i, boolean bExpectResult, int requestCode, CallbackContext callbackContext) {
-        if (i.resolveActivityInfo(this.cordova.getActivity().getPackageManager(), 0) != null)
-        {
-            if (bExpectResult)
-            {
+        if (i.resolveActivityInfo(this.cordova.getActivity().getPackageManager(), 0) != null) {
+            if (bExpectResult) {
                 cordova.setActivityResultCallback(this);
                 this.cordova.getActivity().startActivityForResult(i, requestCode);
-            }
-            else
-            {
+            } else {
                 this.cordova.getActivity().startActivity(i);
                 callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK));
             }
-        }
-        else
-        {
+        } else {
             callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.ERROR));
         }
     }
@@ -424,33 +385,27 @@ public class IntentShim extends CordovaPlugin {
         this.cordova.getActivity().sendBroadcast(intent);
     }
 
-    private void startService(Intent intent)
-    {
+    private void startService(Intent intent) {
         this.cordova.getActivity().startService(intent);
     }
 
-    private Intent populateIntent(JSONObject obj, CallbackContext callbackContext) throws JSONException
-    {
+    private Intent populateIntent(JSONObject obj, CallbackContext callbackContext) throws JSONException {
         String type = obj.has("type") ? obj.getString("type") : null;
         String packageAssociated = obj.has("package") ? obj.getString("package") : null;
 
         Uri uri = null;
         final CordovaResourceApi resourceApi = webView.getResourceApi();
-        if (obj.has("url"))
-        {
+        if (obj.has("url")) {
             String uriAsString = obj.getString("url");
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && uriAsString.startsWith("file://"))
-            {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && uriAsString.startsWith("file://")) {
                 uri = remapUriWithFileProvider(uriAsString, callbackContext);
-            }
-            else
-            {
+            } else {
                 uri = resourceApi.remapUri(Uri.parse(obj.getString("url")));
             }
         }
 
         JSONObject extras = obj.has("extras") ? obj.getJSONObject("extras") : null;
-        Map<String, Object> extrasMap = new HashMap<String, Object>();
+        Map<String, Object> extrasMap = new HashMap<>();
         JSONObject extrasObject = null;
         String extrasKey = "";
         if (extras != null) {
@@ -478,24 +433,19 @@ public class IntentShim extends CordovaPlugin {
             if (type != null) {
                 i.setType(type);
             }
-            if (uri != null)
-            {
+            if (uri != null) {
                 i.setData(uri);
             }
         }
 
         JSONObject component = obj.has("component") ? obj.getJSONObject("component") : null;
-        if (component != null)
-        {
+        if (component != null) {
             String componentPackage = component.has("package") ? component.getString("package") : null;
             String componentClass = component.has("class") ? component.getString("class") : null;
-            if (componentPackage == null || componentClass == null)
-            {
+            if (componentPackage == null || componentClass == null) {
                 Log.w(LOG_TAG, "Component specified but missing corresponding package or class");
                 throw new JSONException("Component specified but missing corresponding package or class");
-            }
-            else
-            {
+            } else {
                 ComponentName componentName = new ComponentName(componentPackage, componentClass);
                 i.setComponent(componentName);
             }
@@ -505,11 +455,9 @@ public class IntentShim extends CordovaPlugin {
             i.setPackage(packageAssociated);
 
         JSONArray flags = obj.has("flags") ? obj.getJSONArray("flags") : null;
-        if (flags != null)
-        {
+        if (flags != null) {
             int length = flags.length();
-            for (int k = 0; k < length; k++)
-            {
+            for (int k = 0; k < length; k++) {
                 i.addFlags(flags.getInt(k));
             }
         }
@@ -523,24 +471,21 @@ public class IntentShim extends CordovaPlugin {
             if (key.equals(Intent.EXTRA_TEXT) && type.equals("text/html")) {
                 i.putExtra(key, Html.fromHtml(valueStr));
             } else if (key.equals(Intent.EXTRA_STREAM)) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && valueStr.startsWith("file://"))
-                {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && valueStr.startsWith("file://")) {
                     Uri uriOfStream = remapUriWithFileProvider(valueStr, callbackContext);
                     if (uriOfStream != null)
                         i.putExtra(key, uriOfStream);
-                }
-                else
-                {
+                } else {
                     i.putExtra(key, resourceApi.remapUri(Uri.parse(valueStr)));
                 }
             } else if (key.equals(Intent.EXTRA_EMAIL)) {
-                i.putExtra(Intent.EXTRA_EMAIL, new String[] { valueStr });
+                i.putExtra(Intent.EXTRA_EMAIL, new String[]{valueStr});
             } else if (key.equals(Intent.EXTRA_KEY_EVENT)) {
                 JSONObject keyEventJson = new JSONObject(valueStr);
                 int keyAction = keyEventJson.getInt("action");
                 int keyCode = keyEventJson.getInt("code");
                 KeyEvent keyEvent = new KeyEvent(keyAction, keyCode);
-                i.putExtra(Intent.EXTRA_KEY_EVENT, keyEvent);
+                i.putExtra(key, keyEvent);
             } else {
                 if (value instanceof Boolean) {
                     i.putExtra(key, Boolean.valueOf(valueStr));
@@ -575,19 +520,15 @@ public class IntentShim extends CordovaPlugin {
     }
 
     @Override
-    public void onActivityResult(int requestCode, int resultCode, Intent intent)
-    {
+    public void onActivityResult(int requestCode, int resultCode, Intent intent) {
         super.onActivityResult(requestCode, resultCode, intent);
-        if (onActivityResultCallbackContext != null && intent != null)
-        {
+        if (onActivityResultCallbackContext != null && intent != null) {
             intent.putExtra("requestCode", requestCode);
             intent.putExtra("resultCode", resultCode);
             PluginResult result = new PluginResult(PluginResult.Status.OK, getIntentJson(intent));
             result.setKeepCallback(true);
             onActivityResultCallbackContext.sendPluginResult(result);
-        }
-        else if (onActivityResultCallbackContext != null)
-        {
+        } else if (onActivityResultCallbackContext != null) {
             Intent canceledIntent = new Intent();
             canceledIntent.putExtra("requestCode", requestCode);
             canceledIntent.putExtra("resultCode", resultCode);
@@ -595,28 +536,6 @@ public class IntentShim extends CordovaPlugin {
             canceledResult.setKeepCallback(true);
             onActivityResultCallbackContext.sendPluginResult(canceledResult);
         }
-    }
-
-    private BroadcastReceiver newBroadcastReceiver() {
-        return new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                String action = intent.getAction();
-                CallbackContext onBroadcastCallbackContext = receiverCallbacks.get(this);
-                if (onBroadcastCallbackContext != null)
-                {
-                    PluginResult result = new PluginResult(PluginResult.Status.OK, getIntentJson(intent));
-                    result.setKeepCallback(true);
-                    onBroadcastCallbackContext.sendPluginResult(result);
-                }
-            }
-        };
-    }
-
-    private void fireOnNewIntent(Intent intent) {
-        PluginResult result = new PluginResult(PluginResult.Status.OK, getIntentJson(intent));
-        result.setKeepCallback(true);
-        this.onNewIntentCallbackContext.sendPluginResult(result);
     }
 
     private JSONObject getIntentJson(Intent intent) {
@@ -649,9 +568,8 @@ public class IntentShim extends CordovaPlugin {
                             items[i].put("type", type);
                             items[i].put("extension", extension);
                         }
-
                     } catch (JSONException e) {
-                        Log.d(LOG_TAG, " Error thrown during intent > JSON conversion");
+                        Log.d(LOG_TAG, "Error thrown during intent > JSON conversion");
                         Log.d(LOG_TAG, e.getMessage());
                         Log.d(LOG_TAG, Arrays.toString(e.getStackTrace()));
                     }
@@ -679,10 +597,9 @@ public class IntentShim extends CordovaPlugin {
 
             return intentJSON;
         } catch (JSONException e) {
-            Log.d(LOG_TAG, " Error thrown during intent > JSON conversion");
+            Log.d(LOG_TAG, "Error thrown during intent > JSON conversion");
             Log.d(LOG_TAG, e.getMessage());
             Log.d(LOG_TAG, Arrays.toString(e.getStackTrace()));
-
             return null;
         }
     }
@@ -713,7 +630,7 @@ public class IntentShim extends CordovaPlugin {
             }
             return result;
         } else if (value instanceof ArrayList<?>) {
-            final ArrayList arrayList = (ArrayList<?>)value;
+            final ArrayList arrayList = (ArrayList<?>) value;
             final JSONArray result = new JSONArray();
             for (int i = 0; i < arrayList.size(); i++)
                 result.put(toJsonValue(arrayList.get(i)));
@@ -788,7 +705,7 @@ public class IntentShim extends CordovaPlugin {
         try {
             Iterator<?> keys = obj.keys();
             while (keys.hasNext()) {
-                String key = (String)keys.next();
+                String key = (String) keys.next();
 
                 if (obj.get(key) instanceof String)
                     returnBundle.putString(key, obj.getString(key));
@@ -800,21 +717,17 @@ public class IntentShim extends CordovaPlugin {
                     returnBundle.putLong(key, obj.getLong(key));
                 else if (obj.get(key) instanceof Double)
                     returnBundle.putDouble(key, obj.getDouble(key));
-                else if (obj.get(key).getClass().isArray() || obj.get(key) instanceof JSONArray)
-                {
+                else if (obj.get(key).getClass().isArray() || obj.get(key) instanceof JSONArray) {
                     JSONArray jsonArray = obj.getJSONArray(key);
                     int length = jsonArray.length();
-                    if (jsonArray.get(0) instanceof String)
-                    {
+                    if (jsonArray.get(0) instanceof String) {
                         String[] stringArray = new String[length];
                         for (int j = 0; j < length; j++)
                             stringArray[j] = jsonArray.getString(j);
                         returnBundle.putStringArray(key, stringArray);
-                    }
-                    else
-                    {
+                    } else {
                         if (key.equals("PLUGIN_CONFIG")) {
-                            ArrayList<Bundle> bundleArray = new ArrayList<Bundle>();
+                            ArrayList<Bundle> bundleArray = new ArrayList<>();
                             for (int k = 0; k < length; k++) {
                                 bundleArray.add(toBundle(jsonArray.getJSONObject(k)));
                             }
@@ -826,15 +739,18 @@ public class IntentShim extends CordovaPlugin {
                             returnBundle.putParcelableArray(key, bundleArray);
                         }
                     }
-                }
-                else if (obj.get(key) instanceof JSONObject)
-                    returnBundle.putBundle(key, toBundle((JSONObject)obj.get(key)));
+                } else if (obj.get(key) instanceof JSONObject)
+                    returnBundle.putBundle(key, toBundle((JSONObject) obj.get(key)));
             }
-        }
-        catch (JSONException e) {
+        } catch (JSONException e) {
             e.printStackTrace();
         }
-
         return returnBundle;
+    }
+
+    private void fireOnNewIntent(Intent intent) {
+        PluginResult result = new PluginResult(PluginResult.Status.OK, getIntentJson(intent));
+        result.setKeepCallback(true);
+        this.onNewIntentCallbackContext.sendPluginResult(result);
     }
 }
